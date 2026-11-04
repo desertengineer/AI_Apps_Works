@@ -82,6 +82,11 @@ function playTone(freq, type, duration) {
         osc.connect(gain); gain.connect(audioCtx.destination); osc.start(); osc.stop(audioCtx.currentTime + duration);
     } catch (e) { }
 }
+function closeAudio() {
+    if (audioCtx && audioCtx.state === 'running') {
+        audioCtx.suspend().catch(() => {});
+    }
+}
 
 // ==========================================
 // Reset Data custom Confirm
@@ -135,8 +140,6 @@ function returnToMenu() {
     if (countdownInterval) clearInterval(countdownInterval);
 
     isVsMode = false;
-    isVsMode = false;
-    clearTimeout(robotTurnTimeout);
     document.getElementById('game-over-screen').classList.add('hidden-screen');
     document.getElementById('level-complete-screen').classList.add('hidden-screen');
     document.getElementById('game-ui').classList.add('hidden');
@@ -414,7 +417,7 @@ function startVsMode(diff) {
         else { clearInterval(iv); cdScreen.classList.add('hidden-screen'); cdText.style.color = "white"; initVsGameplay(); }
     }, 1000);
 
-    // Store for cleanup
+    // Store interval for cleanup
     cdScreen.intervalId = iv;
 }
 
@@ -609,7 +612,6 @@ function fillDock(prefix, dockArr) {
 
         slot.innerHTML = '';
         slot.classList.remove('hidden-piece');
-
         if (dockArr[i]) {
             const dom = createPieceDOM(dockArr[i], true);
             dom.addEventListener('mousedown', (e) => startDrag(e, i, dockArr, prefix));
@@ -826,7 +828,14 @@ function createPlaceParticles(cellElement, color, density = 3) {
     }
 }
 function showFloatingText(text, x, y, className, container = document.body) {
-    const el = document.createElement('div'); el.className = `floating-text ${className}`; el.innerText = text; el.style.left = `${x}px`; el.style.top = `${y}px`; container.appendChild(el); setTimeout(() => el.remove(), 1200);
+    const el = document.createElement('div'); el.className = `floating-text ${className}`; el.innerText = text; el.style.left = `${x}px`; el.style.top = `${y}px`; container.appendChild(el);
+    // Ensure removal even if animation is interrupted
+    const removeFn = () => {
+        if (el && el.parentNode) {
+            el.parentNode.removeChild(el);
+        }
+    };
+    setTimeout(removeFn, 1200);
 }
 
 // --- Game Overs ---
