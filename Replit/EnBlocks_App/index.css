@@ -391,7 +391,7 @@
         }
 
         .block-bomb::before {
-            content: '💣' !important;
+            content: 'ðŸ’£' !important;
             position: absolute !important;
             top: 50% !important;
             left: 50% !important;
@@ -422,7 +422,7 @@
         }
 
         .block-lucky::before {
-            content: '❓' !important;
+            content: 'â“' !important;
             position: absolute !important;
             top: 50% !important;
             left: 50% !important;
