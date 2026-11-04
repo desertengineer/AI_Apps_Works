@@ -82,6 +82,11 @@ function playTone(freq, type, duration) {
         osc.connect(gain); gain.connect(audioCtx.destination); osc.start(); osc.stop(audioCtx.currentTime + duration);
     } catch (e) { }
 }
+function closeAudio() {
+    if (audioCtx && audioCtx.state === 'running') {
+        audioCtx.suspend().catch(() => {});
+    }
+}
 
 // ==========================================
 // Reset Data custom Confirm
@@ -115,9 +120,26 @@ document.getElementById('music-slider').addEventListener('input', (e) => { music
 document.getElementById('sfx-slider').addEventListener('input', (e) => { sfxVol = e.target.value / 100; document.getElementById('sfx-val').innerText = `${e.target.value}%`; playTone(400, 'sine', 0.1); });
 
 function returnToMenu() {
+    closeAudio();
     if (activeMod) activeMod.onEnd();
+
+    // Clear all timeouts and intervals
+    if (robotTurnTimeout) {
+        clearTimeout(robotTurnTimeout);
+        robotTurnTimeout = null;
+    }
+
+    // Clear ModManager intervals
+    if (ModManager.mods.timeAttack.interval) {
+        clearInterval(ModManager.mods.timeAttack.interval);
+        ModManager.mods.timeAttack.interval = null;
+    }
+
+    // Clear countdown interval
+    const countdownInterval = document.getElementById('countdown-screen')?.intervalId;
+    if (countdownInterval) clearInterval(countdownInterval);
+
     isVsMode = false;
-    clearTimeout(robotTurnTimeout);
     document.getElementById('game-over-screen').classList.add('hidden-screen');
     document.getElementById('level-complete-screen').classList.add('hidden-screen');
     document.getElementById('game-ui').classList.add('hidden');
@@ -392,6 +414,9 @@ function startVsMode(diff) {
         else if (count === 0) { cdText.innerText = "GO!"; cdText.style.color = "#4cd964"; playTone(800, 'square', 0.4); }
         else { clearInterval(iv); cdScreen.classList.add('hidden-screen'); cdText.style.color = "white"; initVsGameplay(); }
     }, 1000);
+
+    // Store interval for cleanup
+    cdScreen.intervalId = iv;
 }
 
 function initVsGameplay() {
@@ -428,9 +453,14 @@ function triggerRobotTurn() {
     if (!isVsMode) return;
     let baseDelay = 2000; if (robotDifficulty === 'medium') baseDelay = 1200; if (robotDifficulty === 'pro') baseDelay = 700; if (robotDifficulty === 'hacker') baseDelay = 200;
     robotTurnTimeout = setTimeout(() => { executeRobotMove(); }, baseDelay + (Math.random() * baseDelay * 0.3));
+    const thinkingEl = document.createElement('div');
+    thinkingEl.className = 'robot-thinking';
+    document.getElementById('vs-robot-board').parentElement.appendChild(thinkingEl);
 }
 
 function executeRobotMove() {
+    const thinkingEl = document.querySelector('.robot-thinking');
+    if (thinkingEl) thinkingEl.remove();
     if (!isVsMode) return;
     let bestMove = getRobotMove();
     if (bestMove) {
@@ -473,7 +503,13 @@ function getRobotMove() {
 }
 
 function evaluateBoardState(boardData, piece, r, c) {
-    let tempBoard = boardData.map(row => row.map(cell => ({ color: cell.color })));
+    const tempBoard = [];
+    for (let i = 0; i < BOARD_SIZE; i++) {
+        tempBoard[i] = [];
+        for (let j = 0; j < BOARD_SIZE; j++) {
+            tempBoard[i][j] = { color: boardData[i][j].color };
+        }
+    }
     for (let i = 0; i < piece.matrix.length; i++) for (let j = 0; j < piece.matrix[0].length; j++) if (piece.matrix[i][j]) tempBoard[r + i][c + j].color = piece.color;
     let lines = 0;
     for (let tr = 0; tr < BOARD_SIZE; tr++) if (tempBoard[tr].every(tc => tc.color !== null)) lines++;
@@ -563,6 +599,14 @@ function createPieceDOM(piece, isDock) {
 function fillDock(prefix, dockArr) {
     for (let i = 0; i < 3; i++) {
         const slot = document.getElementById(`${prefix}-${i}`); if (!slot) continue;
+
+        // Remove old listeners
+        const oldDom = slot.querySelector('.piece-container');
+        if (oldDom) {
+            oldDom.removeEventListener('mousedown', startDrag);
+            oldDom.removeEventListener('touchstart', startDrag);
+        }
+
         slot.innerHTML = ''; slot.classList.remove('hidden-piece');
         if (dockArr[i]) {
             const dom = createPieceDOM(dockArr[i], true);
@@ -780,7 +824,14 @@ function createPlaceParticles(cellElement, color, density = 3) {
     }
 }
 function showFloatingText(text, x, y, className, container = document.body) {
-    const el = document.createElement('div'); el.className = `floating-text ${className}`; el.innerText = text; el.style.left = `${x}px`; el.style.top = `${y}px`; container.appendChild(el); setTimeout(() => el.remove(), 1200);
+    const el = document.createElement('div'); el.className = `floating-text ${className}`; el.innerText = text; el.style.left = `${x}px`; el.style.top = `${y}px`; container.appendChild(el);
+    // Ensure removal even if animation is interrupted
+    const removeFn = () => {
+        if (el && el.parentNode) {
+            el.parentNode.removeChild(el);
+        }
+    };
+    setTimeout(removeFn, 1200);
 }
 
 // --- Game Overs ---
