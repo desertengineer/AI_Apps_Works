@@ -115,7 +115,26 @@ document.getElementById('music-slider').addEventListener('input', (e) => { music
 document.getElementById('sfx-slider').addEventListener('input', (e) => { sfxVol = e.target.value / 100; document.getElementById('sfx-val').innerText = `${e.target.value}%`; playTone(400, 'sine', 0.1); });
 
 function returnToMenu() {
+    closeAudio();
     if (activeMod) activeMod.onEnd();
+
+    // Clear all timeouts and intervals
+    if (robotTurnTimeout) {
+        clearTimeout(robotTurnTimeout);
+        robotTurnTimeout = null;
+    }
+
+    // Clear ModManager intervals
+    if (ModManager.mods.timeAttack.interval) {
+        clearInterval(ModManager.mods.timeAttack.interval);
+        ModManager.mods.timeAttack.interval = null;
+    }
+
+    // Clear countdown interval
+    const countdownInterval = document.getElementById('countdown-screen')?.intervalId;
+    if (countdownInterval) clearInterval(countdownInterval);
+
+    isVsMode = false;
     isVsMode = false;
     clearTimeout(robotTurnTimeout);
     document.getElementById('game-over-screen').classList.add('hidden-screen');
@@ -382,16 +401,21 @@ function startVsMode(diff) {
     initAudio(); robotDifficulty = diff; isVsMode = true; activeMod = null;
     document.getElementById('robot-menu').classList.add('hidden-screen');
 
-    const cdScreen = document.getElementById('countdown-screen'); const cdText = document.getElementById('countdown-text');
+    const cdScreen = document.getElementById('countdown-screen');
+    const cdText = document.getElementById('countdown-text');
     cdScreen.classList.remove('hidden-screen');
     let count = 3; cdText.innerText = count; playTone(400, 'square', 0.2);
 
-    let iv = setInterval(() => {
+    // Store interval for cleanup
+    const iv = setInterval(() => {
         count--;
         if (count > 0) { cdText.innerText = count; playTone(400, 'square', 0.2); }
         else if (count === 0) { cdText.innerText = "GO!"; cdText.style.color = "#4cd964"; playTone(800, 'square', 0.4); }
         else { clearInterval(iv); cdScreen.classList.add('hidden-screen'); cdText.style.color = "white"; initVsGameplay(); }
     }, 1000);
+
+    // Store for cleanup
+    cdScreen.intervalId = iv;
 }
 
 function initVsGameplay() {
@@ -478,7 +502,13 @@ function getRobotMove() {
 }
 
 function evaluateBoardState(boardData, piece, r, c) {
-    let tempBoard = boardData.map(row => row.map(cell => ({ color: cell.color })));
+    const tempBoard = [];
+    for (let i = 0; i < BOARD_SIZE; i++) {
+        tempBoard[i] = [];
+        for (let j = 0; j < BOARD_SIZE; j++) {
+            tempBoard[i][j] = { color: boardData[i][j].color };
+        }
+    }
     for (let i = 0; i < piece.matrix.length; i++) for (let j = 0; j < piece.matrix[0].length; j++) if (piece.matrix[i][j]) tempBoard[r + i][c + j].color = piece.color;
     let lines = 0;
     for (let tr = 0; tr < BOARD_SIZE; tr++) if (tempBoard[tr].every(tc => tc.color !== null)) lines++;
@@ -567,8 +597,19 @@ function createPieceDOM(piece, isDock) {
 
 function fillDock(prefix, dockArr) {
     for (let i = 0; i < 3; i++) {
-        const slot = document.getElementById(`${prefix}-${i}`); if (!slot) continue;
-        slot.innerHTML = ''; slot.classList.remove('hidden-piece');
+        const slot = document.getElementById(`${prefix}-${i}`);
+        if (!slot) continue;
+
+        // Remove old listeners
+        const oldDom = slot.querySelector('.piece-container');
+        if (oldDom) {
+            oldDom.removeEventListener('mousedown', startDrag);
+            oldDom.removeEventListener('touchstart', startDrag);
+        }
+
+        slot.innerHTML = '';
+        slot.classList.remove('hidden-piece');
+
         if (dockArr[i]) {
             const dom = createPieceDOM(dockArr[i], true);
             dom.addEventListener('mousedown', (e) => startDrag(e, i, dockArr, prefix));
@@ -789,12 +830,22 @@ function showFloatingText(text, x, y, className, container = document.body) {
 }
 
 // --- Game Overs ---
-function endSingleGame(reasonStr) {
-    document.getElementById('dock-shield').style.display = 'block';
-    playTone(300, 'sawtooth', 0.3); setTimeout(() => playTone(250, 'sawtooth', 0.3), 200); setTimeout(() => playTone(200, 'sawtooth', 0.5), 400);
-    document.getElementById('game-over-title').innerText = reasonStr; document.getElementById('game-over-title').className = "text-6xl bold-stroke mb-2 text-red-500";
-    document.getElementById('game-over-sub').innerText = "Final Score"; document.getElementById('final-score').innerText = score;
-    setTimeout(() => { document.getElementById('game-over-screen').classList.remove('hidden-screen'); }, 800);
+function showFloatingText(text, x, y, className, container = document.body) {
+    const el = document.createElement('div');
+    el.className = `floating-text ${className}`;
+    el.innerText = text;
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    container.appendChild(el);
+
+    // Ensure removal even if animation is interrupted
+    const removeFn = () => {
+        if (el && el.parentNode) {
+            el.parentNode.removeChild(el);
+        }
+    };
+
+    setTimeout(removeFn, 1200);
 }
 
 function checkGameOverSingle() {
