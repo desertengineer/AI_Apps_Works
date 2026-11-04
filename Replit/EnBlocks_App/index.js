@@ -428,9 +428,14 @@ function triggerRobotTurn() {
     if (!isVsMode) return;
     let baseDelay = 2000; if (robotDifficulty === 'medium') baseDelay = 1200; if (robotDifficulty === 'pro') baseDelay = 700; if (robotDifficulty === 'hacker') baseDelay = 200;
     robotTurnTimeout = setTimeout(() => { executeRobotMove(); }, baseDelay + (Math.random() * baseDelay * 0.3));
+    const thinkingEl = document.createElement('div');
+    thinkingEl.className = 'robot-thinking';
+    document.getElementById('vs-robot-board').parentElement.appendChild(thinkingEl);
 }
 
 function executeRobotMove() {
+    const thinkingEl = document.querySelector('.robot-thinking');
+    if (thinkingEl) thinkingEl.remove();
     if (!isVsMode) return;
     let bestMove = getRobotMove();
     if (bestMove) {
