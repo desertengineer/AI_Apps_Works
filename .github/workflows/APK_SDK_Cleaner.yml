@@ -214,26 +214,23 @@ jobs:
         run: |
           set -euo pipefail
 
+          SIGNER_OUTPUT="signed_output"
           mkdir -p APKs-AdsFree
+          rm -rf "$SIGNER_OUTPUT"
+          mkdir -p "$SIGNER_OUTPUT"
+
           java -jar bin/uber-apk-signer.jar \
             --apks unsigned_output/ \
-            --out APKs-AdsFree/ \
-            --overwrite
+            --out "$SIGNER_OUTPUT"
 
-          SIGNED_APK="$(find APKs-AdsFree -maxdepth 1 -type f -name '*.apk' -print -quit)"
-
+          SIGNED_APK="$(find "$SIGNER_OUTPUT" -maxdepth 1 -type f -name '*.apk' -print -quit)"
           if [ -z "$SIGNED_APK" ]; then
             echo "::error::Uber APK Signer did not produce an APK."
             exit 1
           fi
 
-          TARGET_OUTPUT="APKs-AdsFree/$VERIFIED_APK_NAME"
-
-          if [ "$SIGNED_APK" != "$TARGET_OUTPUT" ]; then
-            mv -- "$SIGNED_APK" "$TARGET_OUTPUT"
-          fi
-
-          ls -l "APKs-AdsFree"
+          mv -- "$SIGNED_APK" "APKs-AdsFree/$VERIFIED_APK_NAME"
+          ls -l APKs-AdsFree
 
       - name: Commit Clean APK
         shell: bash
