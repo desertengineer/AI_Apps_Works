@@ -28,8 +28,10 @@ jobs:
       - name: Install Tools (Apktool & Uber APK Signer)
         run: |
           mkdir -p bin
+          # Download valid releases directly from official source repositories
           curl -L -o bin/apktool.jar https://github.com
           curl -L -o bin/uber-apk-signer.jar https://github.com
+          chmod +x bin/*.jar
           echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
 
       - name: Validate Source File
@@ -44,7 +46,9 @@ jobs:
 
       - name: Decompile APK
         run: |
-          java -jar bin/apktool.jar d "APKs-Org/${{ inputs.apk_name }}" -o decompiled_apk --no-src
+          # Use --no-res if you want to skip resource parsing errors entirely, 
+          # or keep it as is below but with the updated binary handling the structures better.
+          java -jar bin/apktool.jar d "APKs-Org/${{ inputs.apk_name }}" -o decompiled_apk --force-manifest
 
       - name: Sanitize AndroidManifest (Permissions & Ad Activities)
         run: |
