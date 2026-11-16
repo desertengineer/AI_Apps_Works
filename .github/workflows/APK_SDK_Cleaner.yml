@@ -120,20 +120,25 @@ jobs:
               "adjust", "appnext", "fyber", "digitalturbine"
           ]
 
-          # This regular expression targets blocks like <activity ...> ... </activity> matching the fragments
+          # Loop through each component type separately to avoid backreference errors
+          component_types = ["activity", "activity-alias", "service", "receiver", "provider"]
+
           for fragment in sdk_fragments:
-              pattern = rf'<(activity|service|receiver|provider)[^>]*name="[^"]*{fragment}[^"]*"[^>]*>.*?</\2>'
-              content = re.sub(pattern, "", content, flags=re.DOTALL | re.IGNORECASE)
-              
-              # Handle self-closing component variants as well
-              self_closing_pattern = rf'<(activity|service|receiver|provider)[^>]*name="[^"]*{fragment}[^"]*"[^>]*/>'
-              content = re.sub(self_closing_pattern, "", content, flags=re.IGNORECASE)
+              for comp_type in component_types:
+                  # Match explicit open/close tags: <activity ...> ... </activity>
+                  full_pattern = rf'<{comp_type}[^>]*name="[^"]*{fragment}[^"]*"[^>]*>.*?</{comp_type}>'
+                  content = re.sub(full_pattern, "", content, flags=re.DOTALL | re.IGNORECASE)
+                  
+                  # Match self-closing tag formats: <activity ... />
+                  self_closing_pattern = rf'<{comp_type}[^>]*name="[^"]*{fragment}[^"]*"[^>]*/>'
+                  content = re.sub(self_closing_pattern, "", content, flags=re.IGNORECASE)
 
           with open(manifest_path, "w", encoding="utf-8") as f:
               f.write(content)
 
-          print("Manifest regex-cleanup completed successfully.")
+          print("Manifest cleanup complete without errors.")
           PY
+
 
 
       - name: Remove Known SDK Paths
