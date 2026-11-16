@@ -28,7 +28,7 @@ jobs:
       - name: Install Tools (Apktool & Uber APK Signer)
         run: |
           mkdir -p bin
-          # Download valid releases directly from official source repositories
+          # Download official release binaries directly instead of repository root URLs
           curl -L -o bin/apktool.jar https://github.com
           curl -L -o bin/uber-apk-signer.jar https://github.com
           chmod +x bin/*.jar
@@ -36,19 +36,37 @@ jobs:
 
       - name: Validate Source File
         run: |
-          TARGET_FILE="APKs-Org/${{ inputs.apk_name }}"
-          if [ ! -f "$TARGET_FILE" ]; then
-            echo "::error::File not found: $TARGET_FILE"
-            echo "Available files in APKs-Org/:"
-            ls -1 APKs-Org/
+          if [ ! -d "APKs-Org" ]; then
+            echo "::error::The directory 'APKs-Org/' does not exist in the root of your repository."
+            exit 1
+          fi
+          
+          echo "=== Available files in APKs-Org/ ==="
+          ls -la APKs-Org/
+          echo "===================================="
+
+          RAW_INPUT="${{ inputs.apk_name }}"
+          CLEAN_INPUT=$(echo "$RAW_INPUT" | xargs)
+          
+          if [[ "$CLEAN_INPUT" != *.apk && "$CLEAN_INPUT" != *.APK ]]; then
+            CLEAN_INPUT="${CLEAN_INPUT}.apk"
+          fi
+
+          MATCHING_FILE=$(find APKs-Org/ -maxdepth 1 -iname "$CLEAN_INPUT" | head -n 1)
+
+          if [ -z "$MATCHING_FILE" ]; then
+            echo "::error::Could not find a file matching '$CLEAN_INPUT' (case-insensitive) in APKs-Org/."
+            echo "Please verify you typed the name correctly based on the folder listing above."
             exit 1
           fi
 
-      - name: Decompile APK
+          echo "Verified file path found: $MATCHING_FILE"
+          echo "VERIFIED_APK_PATH=$MATCHING_FILE" >> $GITHUB_ENV
+          echo "VERIFIED_APK_NAME=$(basename "$MATCHING_FILE")" >> $GITHUB_ENV
+
+      - name: Decompile APK Code Safely
         run: |
-          # Use --no-res if you want to skip resource parsing errors entirely, 
-          # or keep it as is below but with the updated binary handling the structures better.
-          java -jar bin/apktool.jar d "APKs-Org/${{ inputs.apk_name }}" -o decompiled_apk --force-manifest
+          java -jar bin/apktool.jar d "$VERIFIED_APK_PATH" -o decompiled_apk --force-manifest
 
       - name: Sanitize AndroidManifest (Permissions & Ad Activities)
         run: |
@@ -63,8 +81,7 @@ jobs:
             sed -i '/com.google.android.gms.permission.AD_ID/d' "$MANIFEST"
             sed -i '/com.android.vending.BILLING/d' "$MANIFEST"
             
-            # 2. Extract and remove structural ad layout definitions (Wortise, AppLovin MAX, AdMob, Meta, ironSource)
-            # This strips nodes declaring ad activities, receivers, and background init providers
+            # 2. Extract and remove structural ad layout definitions
             sed -i '/<activity[^>]*com\.wortise\.ads/d' "$MANIFEST"
             sed -i '/<activity[^>]*com\.applovin/d' "$MANIFEST"
             sed -i '/<activity[^>]*com\.google\.android\.gms\.ads/d' "$MANIFEST"
@@ -120,7 +137,7 @@ jobs:
       - name: Rebuild Sanitized APK
         run: |
           mkdir -p unsigned_output
-          java -jar bin/apktool.jar b decompiled_apk -o "unsigned_output/${{ inputs.apk_name }}"
+          java -jar bin/apktool.jar b decompiled_apk -o "unsigned_output/$VERIFIED_APK_NAME"
 
       - name: Align and Re-Sign Package Bundle
         run: |
@@ -135,6 +152,6 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          git add "APKs-AdsFree/${{ inputs.apk_name }}"
-          git commit -m "Automated Strip: Completely isolated and purged ad ecosystem from ${{ inputs.apk_name }}" || echo "No modifications traced"
+          git add "APKs-AdsFree/$VERIFIED_APK_NAME"
+          git commit -m "Automated Strip: Completely isolated and purged ad ecosystem from $VERIFIED_APK_NAME" || echo "No modifications traced"
           git push origin main
