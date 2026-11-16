@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       apk_name:
-        description: 'Type the exact filename of the target APK inside APKs-Org/'
+        description: 'Type the exact filename of the target APK inside APKs-Org/ (e.g., app-release.apk)'
         required: true
         type: string
 
@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -26,76 +26,112 @@ jobs:
           java-version: '17'
 
       - name: Install Tools
+        shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p bin
-          # Download official release binaries directly from their source repositories
-          curl -L -o bin/apktool.jar https://github.com
-          curl -L -o bin/uber-apk-signer.jar https://github.com
-          chmod +x bin/*.jar
-          echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
+
+          echo "Downloading Apktool..."
+          curl --fail --location --retry 3 --silent --show-error \
+            -o bin/apktool.jar \
+            https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar
+
+          echo "Downloading Uber APK Signer..."
+          curl --fail --location --retry 3 --silent --show-error \
+            -o bin/uber-apk-signer.jar \
+            https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
+
+          echo "Validating JAR files..."
+          jar tf bin/apktool.jar >/dev/null
+          jar tf bin/uber-apk-signer.jar >/dev/null
+
+          echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
 
       - name: Validate Source File
+        shell: bash
+        env:
+          APK_NAME_INPUT: ${{ inputs.apk_name }}
         run: |
           set -euo pipefail
+
           if [ ! -d "APKs-Org" ]; then
-            echo "::error::APKs-Org folder not found"
+            echo "::error::The directory 'APKs-Org/' does not exist in the root of your repository."
             exit 1
           fi
-          
+
           echo "=== Available files in APKs-Org/ ==="
           ls -la APKs-Org/
           echo "===================================="
 
-          RAW_INPUT="${{ inputs.apk_name }}"
-          CLEAN_INPUT=$(echo "$RAW_INPUT" | xargs)
-          
+          CLEAN_INPUT="$(printf '%s' "$APK_NAME_INPUT" | xargs)"
+
           if [[ "$CLEAN_INPUT" != *.apk && "$CLEAN_INPUT" != *.APK ]]; then
             CLEAN_INPUT="${CLEAN_INPUT}.apk"
           fi
 
-          MATCHING_FILE=$(find APKs-Org/ -maxdepth 1 -iname "$CLEAN_INPUT" | head -n 1)
+          MATCHING_FILE="$(find APKs-Org/ -maxdepth 1 -type f -iname "$CLEAN_INPUT" | head -n 1)"
 
           if [ -z "$MATCHING_FILE" ]; then
-            echo "::error::File not found: $CLEAN_INPUT"
+            echo "::error::Could not find a file matching '$CLEAN_INPUT' (case-insensitive) in APKs-Org/."
+            echo "Please verify the filename from the list above."
             exit 1
           fi
 
           echo "Verified file path found: $MATCHING_FILE"
-          echo "VERIFIED_APK_PATH=$MATCHING_FILE" >> $GITHUB_ENV
-          echo "VERIFIED_APK_NAME=$(basename "$MATCHING_FILE")" >> $GITHUB_ENV
+          echo "VERIFIED_APK_PATH=$MATCHING_FILE" >> "$GITHUB_ENV"
+          echo "VERIFIED_APK_NAME=$(basename "$MATCHING_FILE")" >> "$GITHUB_ENV"
 
       - name: Decompile APK
+        shell: bash
         run: |
+          set -euo pipefail
           java -jar bin/apktool.jar d "$VERIFIED_APK_PATH" -o decompiled_apk --force-manifest
 
       - name: Remove Ad/Tracking Permissions
+        shell: bash
         run: |
+          set -euo pipefail
+
           MANIFEST="decompiled_apk/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
             echo "Processing AndroidManifest.xml..."
-            
-            # 1. Strip all explicit network and hardware identification access tokens
+
+            # Remove explicit ad/tracking permissions
             sed -i '/android.permission.INTERNET/d' "$MANIFEST"
             sed -i '/android.permission.ACCESS_NETWORK_STATE/d' "$MANIFEST"
             sed -i '/android.permission.ACCESS_WIFI_STATE/d' "$MANIFEST"
             sed -i '/com.google.android.gms.permission.AD_ID/d' "$MANIFEST"
             sed -i '/com.android.vending.BILLING/d' "$MANIFEST"
+
+            # Remove ad SDK activity/provider entries
             sed -i '/<activity[^>]*com\.wortise\.ads/d' "$MANIFEST"
             sed -i '/<activity[^>]*com\.applovin/d' "$MANIFEST"
             sed -i '/<activity[^>]*com\.google\.android\.gms\.ads/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.facebook\.ads/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.ironsource/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.unity3d/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.startapp/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.mbridge/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.chartboost/d' "$MANIFEST"
+            sed -i '/<provider[^>]*com\.applovin/d' "$MANIFEST"
             sed -i '/<provider[^>]*com\.google\.android\.gms\.ads/d' "$MANIFEST"
             sed -i '/<provider[^>]*com\.adjust/d' "$MANIFEST"
-            
+
             echo "Manifest cleanup validation:"
             grep -E "permission|ads|applovin|wortise" "$MANIFEST" || echo "Cleaned completely!"
+          else
+            echo "::error::AndroidManifest.xml was not generated by apktool."
+            exit 1
           fi
 
       - name: Remove Known SDK Paths
+        shell: bash
         run: |
+          set -euo pipefail
+
           cd decompiled_apk
-          
-          # Exhaustive matrix covering requested network definitions across standard and multidex structures
+
           TARGET_SMALI_PATHS=(
             "smali*/com/wortise/ads"
             "smali*/com/applovin"
@@ -115,42 +151,64 @@ jobs:
             "smali*/com/digitalturbine/ignite"
             "smali*/com/amazon/device/iap"
           )
-          
+
           echo "Executing codebase purge..."
           for pattern in "${TARGET_SMALI_PATHS[@]}"; do
             for directory in $pattern; do
               if [ -d "$directory" ]; then
-                echo "Stripping bytecode signature block: $directory"
-                rm -rf "$directory"
+                echo "Removing SDK directory: $directory"
+                rm -rf -- "$directory"
               fi
             done
           done
 
       - name: Rebuild APK
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p unsigned_output
           java -jar bin/apktool.jar b decompiled_apk -o "unsigned_output/$VERIFIED_APK_NAME"
 
       - name: Sign APK
+        shell: bash
         run: |
+          set -euo pipefail
+
           mkdir -p APKs-AdsFree
           java -jar bin/uber-apk-signer.jar \
             --apks unsigned_output/ \
             --out APKs-AdsFree/ \
             --overwrite
-          SIGNED_APK=$(find APKs-AdsFree -maxdepth 1 -type f -name '*.apk' -print -quit)
+
+          SIGNED_APK="$(find APKs-AdsFree -maxdepth 1 -type f -name '*.apk' -print -quit)"
+
           if [ -z "$SIGNED_APK" ]; then
-            echo "::error::Signer did not produce an APK."
+            echo "::error::Uber APK Signer did not produce an APK."
             exit 1
           fi
-          if [ "$SIGNED_APK" != "APKs-AdsFree/$VERIFIED_APK_NAME" ]; then
-            mv "$SIGNED_APK" "APKs-AdsFree/$VERIFIED_APK_NAME"
+
+          TARGET_OUTPUT="APKs-AdsFree/$VERIFIED_APK_NAME"
+
+          if [ "$SIGNED_APK" != "$TARGET_OUTPUT" ]; then
+            mv -- "$SIGNED_APK" "$TARGET_OUTPUT"
           fi
 
-      - name: Commit Artifact
+          ls -l "APKs-AdsFree"
+
+      - name: Commit Clean APK
+        shell: bash
         run: |
+          set -euo pipefail
+
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add "APKs-AdsFree/$VERIFIED_APK_NAME"
-          git commit -m "Automated Strip: $VERIFIED_APK_NAME" || echo "No changes"
-          git push origin main
+
+          if git diff --cached --quiet; then
+            echo "No APK changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Automated Strip: Removed ad/tracking code from $VERIFIED_APK_NAME"
+          git push origin HEAD:${GITHUB_REF_NAME}
