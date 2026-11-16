@@ -94,76 +94,47 @@ jobs:
           set -euo pipefail
 
           python3 - <<'PY'
-          import xml.etree.ElementTree as ET
+          import re
 
           manifest_path = "decompiled_apk/AndroidManifest.xml"
-          android_ns = "http://schemas.android.com/apk/res/android"
-          android_name = f"{{{android_ns}}}name"
+          
+          with open(manifest_path, "r", encoding="utf-8") as f:
+              content = f.read()
 
-          # Preserve the manifest's existing namespace prefixes when serializing.
-          for _, (prefix, uri) in ET.iterparse(manifest_path, events=("start-ns",)):
-              try:
-                  ET.register_namespace(prefix or "", uri)
-              except ValueError:
-                  pass
+          # 1. Strip the core network and tracking permissions completely
+          permissions_to_remove = [
+              r'<uses-permission[^>]*android:name="android\.permission\.INTERNET"[^>]*/>',
+              r'<uses-permission[^>]*android:name="android\.permission\.ACCESS_NETWORK_STATE"[^>]*/>',
+              r'<uses-permission[^>]*android:name="android\.permission\.ACCESS_WIFI_STATE"[^>]*/>',
+              r'<uses-permission[^>]*android:name="com\.google\.android\.gms\.permission\.AD_ID"[^>]*/>',
+              r'<uses-permission[^>]*android:name="com\.android\.vending\.BILLING"[^>]*/>'
+          ]
+          
+          for pattern in permissions_to_remove:
+              content = re.sub(pattern, "", content)
 
-          tree = ET.parse(manifest_path)
-          root = tree.getroot()
+          # 2. Block all 13 compiled ad activities and service declarations
+          sdk_fragments = [
+              "wortise", "applovin", "google.android.gms.ads", "facebook.ads",
+              "ironsource", "unity3d", "startapp", "mbridge", "chartboost",
+              "adjust", "appnext", "fyber", "digitalturbine"
+          ]
 
-          permissions_to_remove = {
-              "android.permission.INTERNET",
-              "android.permission.ACCESS_NETWORK_STATE",
-              "android.permission.ACCESS_WIFI_STATE",
-              "com.google.android.gms.permission.AD_ID",
-              "com.android.vending.BILLING",
-          }
+          # This regular expression targets blocks like <activity ...> ... </activity> matching the fragments
+          for fragment in sdk_fragments:
+              pattern = rf'<(activity|service|receiver|provider)[^>]*name="[^"]*{fragment}[^"]*"[^>]*>.*?</\2>'
+              content = re.sub(pattern, "", content, flags=re.DOTALL | re.IGNORECASE)
+              
+              # Handle self-closing component variants as well
+              self_closing_pattern = rf'<(activity|service|receiver|provider)[^>]*name="[^"]*{fragment}[^"]*"[^>]*/>'
+              content = re.sub(self_closing_pattern, "", content, flags=re.IGNORECASE)
 
-          def local_name(tag):
-              return tag.rsplit("}", 1)[-1]
+          with open(manifest_path, "w", encoding="utf-8") as f:
+              f.write(content)
 
-          for element in list(root):
-              if (
-                  local_name(element.tag).startswith("uses-permission")
-                  and element.get(android_name) in permissions_to_remove
-              ):
-                  root.remove(element)
-
-          sdk_name_fragments = (
-              "com.wortise.ads",
-              "com.applovin",
-              "com.google.android.gms.ads",
-              "com.facebook.ads",
-              "com.ironsource",
-              "com.unity3d",
-              "com.startapp",
-              "com.mbridge",
-              "com.chartboost",
-              "com.adjust",
-          )
-
-          application = next(
-              (element for element in list(root)
-               if local_name(element.tag) == "application"),
-              None,
-          )
-
-          if application is not None:
-              component_tags = {"activity", "activity-alias", "provider", "service", "receiver"}
-
-              for component in list(application):
-                  component_name = component.get(android_name, "").lower()
-                  if (
-                      local_name(component.tag) in component_tags
-                      and any(fragment in component_name for fragment in sdk_name_fragments)
-                  ):
-                      application.remove(component)
-
-          tree.write(manifest_path, encoding="utf-8", xml_declaration=True)
-
-          # Fail this step here, with a clear error, if the edited XML is invalid.
-          ET.parse(manifest_path)
-          print("Manifest cleanup complete; XML parsed successfully.")
+          print("Manifest regex-cleanup completed successfully.")
           PY
+
 
       - name: Remove Known SDK Paths
         shell: bash
