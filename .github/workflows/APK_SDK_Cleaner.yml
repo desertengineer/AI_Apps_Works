@@ -1,0 +1,136 @@
+name: De-Ad & Strip Tracking from APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_name:
+        description: 'Type the exact filename of the target APK inside APKs-Org/ (e.g., app-release.apk)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  strip-ads:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Install Tools (Apktool & Uber APK Signer)
+        run: |
+          mkdir -p bin
+          curl -L -o bin/apktool.jar https://github.com
+          curl -L -o bin/uber-apk-signer.jar https://github.com
+          echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
+
+      - name: Validate Source File
+        run: |
+          TARGET_FILE="APKs-Org/${{ inputs.apk_name }}"
+          if [ ! -f "$TARGET_FILE" ]; then
+            echo "::error::File not found: $TARGET_FILE"
+            echo "Available files in APKs-Org/:"
+            ls -1 APKs-Org/
+            exit 1
+          fi
+
+      - name: Decompile APK
+        run: |
+          java -jar bin/apktool.jar d "APKs-Org/${{ inputs.apk_name }}" -o decompiled_apk --no-src
+
+      - name: Sanitize AndroidManifest (Permissions & Ad Activities)
+        run: |
+          MANIFEST="decompiled_apk/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            echo "Processing AndroidManifest.xml..."
+            
+            # 1. Strip all explicit network and hardware identification access tokens
+            sed -i '/android.permission.INTERNET/d' "$MANIFEST"
+            sed -i '/android.permission.ACCESS_NETWORK_STATE/d' "$MANIFEST"
+            sed -i '/android.permission.ACCESS_WIFI_STATE/d' "$MANIFEST"
+            sed -i '/com.google.android.gms.permission.AD_ID/d' "$MANIFEST"
+            sed -i '/com.android.vending.BILLING/d' "$MANIFEST"
+            
+            # 2. Extract and remove structural ad layout definitions (Wortise, AppLovin MAX, AdMob, Meta, ironSource)
+            # This strips nodes declaring ad activities, receivers, and background init providers
+            sed -i '/<activity[^>]*com\.wortise\.ads/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.applovin/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.google\.android\.gms\.ads/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.facebook\.ads/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.ironsource/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.unity3d/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.startapp/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.mbridge/d' "$MANIFEST"
+            sed -i '/<activity[^>]*com\.chartboost/d' "$MANIFEST"
+            sed -i '/<provider[^>]*com\.applovin/d' "$MANIFEST"
+            sed -i '/<provider[^>]*com\.google\.android\.gms\.ads/d' "$MANIFEST"
+            sed -i '/<provider[^>]*com\.adjust/d' "$MANIFEST"
+            
+            echo "Manifest cleanup validation:"
+            grep -E "permission|ads|applovin|wortise" "$MANIFEST" || echo "Cleaned completely!"
+          fi
+
+      - name: Purge Specified Ad & Tracking Smali Blueprints
+        run: |
+          cd decompiled_apk
+          
+          # Exhaustive matrix covering requested network definitions across standard and multidex structures
+          TARGET_SMALI_PATHS=(
+            "smali*/com/wortise/ads"
+            "smali*/com/applovin"
+            "smali*/com/google/android/gms/ads"
+            "smali*/com/google/firebase/analytics"
+            "smali*/com/amazon/device/ads"
+            "smali*/com/amazon/aps"
+            "smali*/com/startapp"
+            "smali*/com/ironsource"
+            "smali*/com/facebook/ads"
+            "smali*/com/unity3d/services/ads"
+            "smali*/com/mbridge/msdk"
+            "smali*/com/chartboost/sdk"
+            "smali*/com/appnext"
+            "smali*/com/fyber/inneractive"
+            "smali*/com/adjust/sdk"
+            "smali*/com/digitalturbine/ignite"
+            "smali*/com/amazon/device/iap"
+          )
+          
+          echo "Executing codebase purge..."
+          for pattern in "${TARGET_SMALI_PATHS[@]}"; do
+            for directory in $pattern; do
+              if [ -d "$directory" ]; then
+                echo "Stripping bytecode signature block: $directory"
+                rm -rf "$directory"
+              fi
+            done
+          done
+
+      - name: Rebuild Sanitized APK
+        run: |
+          mkdir -p unsigned_output
+          java -jar bin/apktool.jar b decompiled_apk -o "unsigned_output/${{ inputs.apk_name }}"
+
+      - name: Align and Re-Sign Package Bundle
+        run: |
+          mkdir -p APKs-AdsFree
+          java -jar bin/uber-apk-signer.jar \
+            --apks unsigned_output/ \
+            --out APKs-AdsFree/ \
+            --overwrite
+
+      - name: Commit Cleared Artifact to Repository
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          git add "APKs-AdsFree/${{ inputs.apk_name }}"
+          git commit -m "Automated Strip: Completely isolated and purged ad ecosystem from ${{ inputs.apk_name }}" || echo "No modifications traced"
+          git push origin main
