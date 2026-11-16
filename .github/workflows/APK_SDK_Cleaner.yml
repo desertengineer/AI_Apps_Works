@@ -28,7 +28,7 @@ jobs:
       - name: Install Tools (Apktool & Uber APK Signer)
         run: |
           mkdir -p bin
-          # Download official release binaries directly instead of repository root URLs
+          # Download valid binary distributions directly from their release assets
           curl -L -o bin/apktool.jar https://github.com
           curl -L -o bin/uber-apk-signer.jar https://github.com
           chmod +x bin/*.jar
