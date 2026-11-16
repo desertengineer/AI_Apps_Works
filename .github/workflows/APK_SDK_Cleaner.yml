@@ -29,18 +29,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p bin
-
-          curl --fail --location --retry 3 \
-            -o bin/apktool.jar \
-            https://github.com/iBotPeaches/Apktool/releases/download/v2.10.0/apktool_2.10.0.jar
-
-          curl --fail --location --retry 3 \
-            -o bin/uber-apk-signer.jar \
-            https://github.com/patrickfav/uber-apk-signer/releases/download/v1.3.0/uber-apk-signer-1.3.0.jar
-
-          jar tf bin/apktool.jar >/dev/null
-          jar tf bin/uber-apk-signer.jar >/dev/null
-          echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+          # Download official release binaries directly from their source repositories
+          curl -L -o bin/apktool.jar https://github.com
+          curl -L -o bin/uber-apk-signer.jar https://github.com
+          chmod +x bin/*.jar
+          echo "$GITHUB_WORKSPACE/bin" >> $GITHUB_PATH
 
       - name: Validate Source File
         run: |
@@ -49,24 +42,28 @@ jobs:
             echo "::error::APKs-Org folder not found"
             exit 1
           fi
-
-          echo "Available APKs:"
-          ls -1 APKs-Org
+          
+          echo "=== Available files in APKs-Org/ ==="
+          ls -la APKs-Org/
+          echo "===================================="
 
           RAW_INPUT="${{ inputs.apk_name }}"
-          CLEAN_INPUT="$(echo "$RAW_INPUT" | xargs)"
+          CLEAN_INPUT=$(echo "$RAW_INPUT" | xargs)
+          
           if [[ "$CLEAN_INPUT" != *.apk && "$CLEAN_INPUT" != *.APK ]]; then
             CLEAN_INPUT="${CLEAN_INPUT}.apk"
           fi
 
-          MATCHING_FILE="$(find APKs-Org -maxdepth 1 -type f -iname "$CLEAN_INPUT" | head -n 1)"
+          MATCHING_FILE=$(find APKs-Org/ -maxdepth 1 -iname "$CLEAN_INPUT" | head -n 1)
+
           if [ -z "$MATCHING_FILE" ]; then
             echo "::error::File not found: $CLEAN_INPUT"
             exit 1
           fi
 
-          echo "VERIFIED_APK_PATH=$MATCHING_FILE" >> "$GITHUB_ENV"
-          echo "VERIFIED_APK_NAME=$(basename "$MATCHING_FILE")" >> "$GITHUB_ENV"
+          echo "Verified file path found: $MATCHING_FILE"
+          echo "VERIFIED_APK_PATH=$MATCHING_FILE" >> $GITHUB_ENV
+          echo "VERIFIED_APK_NAME=$(basename "$MATCHING_FILE")" >> $GITHUB_ENV
 
       - name: Decompile APK
         run: |
@@ -76,6 +73,9 @@ jobs:
         run: |
           MANIFEST="decompiled_apk/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
+            echo "Processing AndroidManifest.xml..."
+            
+            # 1. Strip all explicit network and hardware identification access tokens
             sed -i '/android.permission.INTERNET/d' "$MANIFEST"
             sed -i '/android.permission.ACCESS_NETWORK_STATE/d' "$MANIFEST"
             sed -i '/android.permission.ACCESS_WIFI_STATE/d' "$MANIFEST"
@@ -85,26 +85,44 @@ jobs:
             sed -i '/<activity[^>]*com\.applovin/d' "$MANIFEST"
             sed -i '/<activity[^>]*com\.google\.android\.gms\.ads/d' "$MANIFEST"
             sed -i '/<provider[^>]*com\.google\.android\.gms\.ads/d' "$MANIFEST"
+            sed -i '/<provider[^>]*com\.adjust/d' "$MANIFEST"
+            
+            echo "Manifest cleanup validation:"
+            grep -E "permission|ads|applovin|wortise" "$MANIFEST" || echo "Cleaned completely!"
           fi
 
       - name: Remove Known SDK Paths
         run: |
           cd decompiled_apk
-          for dir in \
-            "smali*/com/wortise/ads" \
-            "smali*/com/applovin" \
-            "smali*/com/google/android/gms/ads" \
-            "smali*/com/google/firebase/analytics" \
-            "smali*/com/amazon/device/ads" \
-            "smali*/com/startapp" \
-            "smali*/com/ironsource" \
-            "smali*/com/facebook/ads" \
-            "smali*/com/unity3d/services/ads" \
-            "smali*/com/mbridge/msdk" \
-            "smali*/com/chartboost/sdk" \
-            "smali*/com/adjust/sdk"; do
-            for p in $dir; do
-              [ -d "$p" ] && rm -rf "$p"
+          
+          # Exhaustive matrix covering requested network definitions across standard and multidex structures
+          TARGET_SMALI_PATHS=(
+            "smali*/com/wortise/ads"
+            "smali*/com/applovin"
+            "smali*/com/google/android/gms/ads"
+            "smali*/com/google/firebase/analytics"
+            "smali*/com/amazon/device/ads"
+            "smali*/com/amazon/aps"
+            "smali*/com/startapp"
+            "smali*/com/ironsource"
+            "smali*/com/facebook/ads"
+            "smali*/com/unity3d/services/ads"
+            "smali*/com/mbridge/msdk"
+            "smali*/com/chartboost/sdk"
+            "smali*/com/appnext"
+            "smali*/com/fyber/inneractive"
+            "smali*/com/adjust/sdk"
+            "smali*/com/digitalturbine/ignite"
+            "smali*/com/amazon/device/iap"
+          )
+          
+          echo "Executing codebase purge..."
+          for pattern in "${TARGET_SMALI_PATHS[@]}"; do
+            for directory in $pattern; do
+              if [ -d "$directory" ]; then
+                echo "Stripping bytecode signature block: $directory"
+                rm -rf "$directory"
+              fi
             done
           done
 
@@ -120,6 +138,14 @@ jobs:
             --apks unsigned_output/ \
             --out APKs-AdsFree/ \
             --overwrite
+          SIGNED_APK=$(find APKs-AdsFree -maxdepth 1 -type f -name '*.apk' -print -quit)
+          if [ -z "$SIGNED_APK" ]; then
+            echo "::error::Signer did not produce an APK."
+            exit 1
+          fi
+          if [ "$SIGNED_APK" != "APKs-AdsFree/$VERIFIED_APK_NAME" ]; then
+            mv "$SIGNED_APK" "APKs-AdsFree/$VERIFIED_APK_NAME"
+          fi
 
       - name: Commit Artifact
         run: |
